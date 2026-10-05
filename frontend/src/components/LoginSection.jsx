@@ -1,6 +1,55 @@
 import { useState } from "react";
 import API_BASE_URL from "../api";
 
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+const wait = (milliseconds) =>
+  new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
+const fetchJsonWithRetry = async (url, options, onRetry) => {
+  const retryDelays = [0, 8000, 12000];
+  let lastError;
+
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    if (retryDelays[attempt] > 0) {
+      onRetry?.();
+      await wait(retryDelays[attempt]);
+    }
+
+    try {
+      const response = await fetch(url, options);
+      const responseText = await response.text();
+      let data = {};
+
+      if (responseText) {
+        try {
+          data = JSON.parse(responseText);
+        } catch {
+          data = { message: responseText };
+        }
+      }
+
+      const canRetry =
+        RETRYABLE_STATUSES.has(response.status) &&
+        attempt < retryDelays.length - 1;
+
+      if (canRetry) {
+        continue;
+      }
+
+      return { response, data };
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === retryDelays.length - 1) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("Request failed");
+};
+
 function LoginSection({ onLogin, requireAdmin = false }) {
   const [viewMode, setViewMode] = useState("login");
   const [formData, setFormData] = useState({
@@ -39,15 +88,17 @@ function LoginSection({ onLogin, requireAdmin = false }) {
     e.preventDefault();
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const { response, data } = await fetchJsonWithRetry(
+        `${API_BASE_URL}/api/auth/login`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(formData),
         },
-        body: JSON.stringify(formData),
-      });
-
-      const data = await response.json();
+        () => setMessage("Backend is waking up. Retrying login...")
+      );
 
       if (!response.ok) {
         setMessage(data.message || "Login failed");
@@ -79,15 +130,17 @@ function LoginSection({ onLogin, requireAdmin = false }) {
     e.preventDefault();
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const { response, data } = await fetchJsonWithRetry(
+        `${API_BASE_URL}/api/auth/forgot-password`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ email: forgotEmail }),
         },
-        body: JSON.stringify({ email: forgotEmail }),
-      });
-
-      const data = await response.json();
+        () => setMessage("Backend is waking up. Retrying...")
+      );
 
       if (!response.ok) {
         setMessage(data.message || "Could not send OTP");
@@ -111,15 +164,17 @@ function LoginSection({ onLogin, requireAdmin = false }) {
     e.preventDefault();
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const { response, data } = await fetchJsonWithRetry(
+        `${API_BASE_URL}/api/auth/reset-password`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(resetData),
         },
-        body: JSON.stringify(resetData),
-      });
-
-      const data = await response.json();
+        () => setMessage("Backend is waking up. Retrying...")
+      );
 
       if (!response.ok) {
         setMessage(data.message || "Password reset failed");
